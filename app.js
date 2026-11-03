@@ -1,70 +1,45 @@
-/* MyTV: static, remote-first prototype. It stores only the selected mode locally. */
+/* MyTV: dependency-free, remote-first browser prototype. */
 const VIDEO_SOURCES = {
-  bunny: 'https://archive.org/download/BigBuckBunny_124/Content/big_buck_bunny_720p_surround.mp4',
-  sintel: 'https://archive.org/download/Sintel/sintel-2048-surround.mp4',
-  dream: 'https://archive.org/download/ElephantsDream/ed_1024_512kb.mp4',
+  bunny: ['https://media.w3.org/2010/05/bunny/trailer.mp4', 'https://archive.org/download/BigBuckBunny_124/Content/big_buck_bunny_720p_surround.mp4'],
+  short: ['https://media.w3.org/2010/05/video/movie_300.mp4', 'https://archive.org/download/ElephantsDream/ed_1024_512kb.mp4'],
 };
-
+// Primary sources are small H.264/AAC MP4s; Blender Open Movie mirrors are used after a real media error.
 const channels = [
-  { id: 'cartoons', number: 1, name: 'Cartoons', accent: '#f8c34e', kids: true, programs: [
-    { title: 'Big Buck Bunny', source: 'bunny', duration: 596 }, { title: 'Sintel', source: 'sintel', duration: 888 }
-  ]},
-  { id: 'cinema', number: 2, name: 'Movie Night', accent: '#e46b8d', kids: false, programs: [
-    { title: 'Sintel', source: 'sintel', duration: 888 }, { title: 'Elephants Dream', source: 'dream', duration: 653 }
-  ]},
-  { id: 'documentary', number: 3, name: 'Open Cinema', accent: '#70b9ff', kids: false, programs: [
-    { title: 'Elephants Dream', source: 'dream', duration: 653 }, { title: 'Big Buck Bunny', source: 'bunny', duration: 596 }
-  ]},
+  { id: 'cartoons', number: 1, name: 'Cartoons', kids: true, programs: [{ title: 'Big Buck Bunny', source: 'bunny', duration: 596 }, { title: 'Open Movie Short', source: 'short', duration: 180 }] },
+  { id: 'kids-club', number: 2, name: 'Kids Club', kids: true, programs: [{ title: 'Open Movie Short', source: 'short', duration: 180 }, { title: 'Big Buck Bunny', source: 'bunny', duration: 596 }] },
+  { id: 'family', number: 3, name: 'Family Cinema', kids: true, programs: [{ title: 'Big Buck Bunny', source: 'bunny', duration: 596 }, { title: 'Open Movie Short', source: 'short', duration: 180 }] },
+  { id: 'cinema', number: 4, name: 'Movie Night', kids: false, programs: [{ title: 'Open Movie Short', source: 'short', duration: 180 }, { title: 'Big Buck Bunny', source: 'bunny', duration: 596 }] },
+  { id: 'open-cinema', number: 5, name: 'Open Cinema', kids: false, programs: [{ title: 'Big Buck Bunny', source: 'bunny', duration: 596 }, { title: 'Open Movie Short', source: 'short', duration: 180 }] },
 ];
-const modes = {
-  normal: { label: 'Normal', description: 'All configured channels, guide and settings.' },
-  kids: { label: 'Kids', description: 'Only channels approved for children.' },
-  simple: { label: 'Simple', description: 'Large text and only selected channels.' },
-};
-
-// Do not use Object.fromEntries here: some TV browser builds lag desktop browsers.
+const modes = { normal: { label: 'Normal', description: 'All configured channels, guide and settings.' }, kids: { label: 'Kids', description: 'Only child-approved channels.' }, simple: { label: 'Simple', description: 'Large text and three selected channels.' } };
 const el = {};
-['player','startup','hud','channel-number','channel-name','programme-title','programme-time','programme-progress','mode-label','channel-dial','guide','guide-list','settings','mode-list','toast','screen-play'].forEach(id => {
-  el[id] = document.getElementById(id);
-});
+['player','startup','hud','channel-number','channel-name','programme-title','programme-time','programme-progress','mode-label','channel-dial','guide','guide-list','settings','mode-list','toast','screen-play','screen-play-label','playback-status','playback-message','retry-playback','guide-close','settings-close'].forEach((id) => { el[id] = document.getElementById(id); });
 let mode = localStorage.getItem('mytv-mode') || 'normal';
-let channelIndex = 0;
-let selectedGuide = 0;
-let selectedMode = Object.keys(modes).indexOf(mode);
-let hudTimer;
-
+let channelIndex = 0; let selectedGuide = 0; let selectedMode = Object.keys(modes).indexOf(mode); let hudTimer; let loadTimer; let sourceIndex = 0; let activeProgram; let mediaReady = false; let pendingOffset = 0; let historyPanel = null;
 function secondsSinceMidnight() { const now = new Date(); return now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds(); }
-function scheduleFor(channel, at = secondsSinceMidnight()) {
-  const total = channel.programs.reduce((sum, p) => sum + p.duration, 0);
-  let cursor = at % total;
-  for (const program of channel.programs) { if (cursor < program.duration) return { ...program, offset: cursor }; cursor -= program.duration; }
-  return { ...channel.programs[0], offset: 0 };
-}
-function visibleChannels() { return mode === 'kids' ? channels.filter(c => c.kids) : mode === 'simple' ? channels.slice(0, 2) : channels; }
+function scheduleFor(channel, at = secondsSinceMidnight()) { const total = channel.programs.reduce((sum, program) => sum + program.duration, 0); let cursor = at % total; for (const program of channel.programs) { if (cursor < program.duration) return { ...program, offset: cursor }; cursor -= program.duration; } return { ...channel.programs[0], offset: 0 }; }
+function visibleChannels() { if (mode === 'kids') return channels.filter((channel) => channel.kids); if (mode === 'simple') return channels.slice(0, 3); return channels; }
 function currentChannel() { const list = visibleChannels(); channelIndex = ((channelIndex % list.length) + list.length) % list.length; return list[channelIndex]; }
-function formatClock(seconds) { return new Date(seconds * 1000).toISOString().slice(14,19); }
-function showToast(text) { el.toast.textContent = text; el.toast.classList.add('show'); clearTimeout(el.toast.timer); el.toast.timer = setTimeout(() => el.toast.classList.remove('show'), 2600); }
+function formatClock(seconds) { return new Date(seconds * 1000).toISOString().slice(14, 19); }
+function showToast(message) { el.toast.textContent = message; el.toast.classList.add('show'); clearTimeout(el.toast.timer); el.toast.timer = setTimeout(() => el.toast.classList.remove('show'), 3000); }
 function showHud() { el.hud.classList.add('is-visible'); clearTimeout(hudTimer); hudTimer = setTimeout(() => el.hud.classList.remove('is-visible'), 5200); }
-function renderDial() { el.channelDial.innerHTML = visibleChannels().map((channel, index) => `<button class="channel-dot ${index === channelIndex ? 'active' : ''}" data-index="${index}" aria-label="Channel ${channel.number}, ${channel.name}">${channel.number}</button>`).join(''); el.channelDial.querySelectorAll('button').forEach(button => button.addEventListener('click', () => tune(Number(button.dataset.index)))); }
-function updateNow() { const channel = currentChannel(), program = scheduleFor(channel); el['channel-number'].textContent = String(channel.number).padStart(2,'0'); el['channel-name'].textContent = channel.name; el['programme-title'].textContent = program.title; el['programme-time'].textContent = `${formatClock(program.offset)} into this programme`; el['programme-progress'].style.width = `${Math.round(program.offset / program.duration * 100)}%`; }
-function tune(index) {
-  channelIndex = index; const channel = currentChannel(), program = scheduleFor(channel); updateNow(); renderDial();
-  el.player.src = VIDEO_SOURCES[program.source]; el.player.load();
-  el.player.onloadedmetadata = () => { const safeOffset = Math.min(program.offset, Math.max(0, el.player.duration - 2)); if (Number.isFinite(safeOffset)) el.player.currentTime = safeOffset; el.player.play().then(() => el['screen-play'].classList.add('hidden')).catch(() => el['screen-play'].classList.remove('hidden')); };
-  showToast(`${channel.number}. ${channel.name} — ${program.title}`); showHud();
-}
-function renderGuide() { const list = visibleChannels(); selectedGuide = Math.min(selectedGuide, list.length - 1); el['guide-list'].innerHTML = list.map((channel, index) => { const program = scheduleFor(channel); return `<button class="guide-row ${index === selectedGuide ? 'selected' : ''}" data-index="${index}"><span class="number">${String(channel.number).padStart(2,'0')}</span><span><strong>${channel.name}</strong><small>Now: ${program.title} · ${formatClock(program.offset)} in</small></span><time>${Math.round((program.duration-program.offset)/60)} min left</time></button>`; }).join(''); el['guide-list'].querySelectorAll('button').forEach(button => button.addEventListener('click', () => { tune(Number(button.dataset.index)); closePanels(); })); }
-function renderModes() { const entries = Object.entries(modes); el['mode-list'].innerHTML = entries.map(([key, info], index) => `<button class="mode-row ${index === selectedMode ? 'selected' : ''}" data-mode="${key}"><span>${index + 1}</span><span><strong>${info.label}</strong><small>${info.description}</small></span></button>`).join(''); el['mode-list'].querySelectorAll('button').forEach(button => button.addEventListener('click', () => setMode(button.dataset.mode))); }
+function updateNow() { const channel = currentChannel(); const program = scheduleFor(channel); el['channel-number'].textContent = String(channel.number).padStart(2, '0'); el['channel-name'].textContent = channel.name; el['programme-title'].textContent = program.title; el['programme-time'].textContent = `${formatClock(program.offset)} into this programme`; el['programme-progress'].style.width = `${Math.round((program.offset / program.duration) * 100)}%`; }
+function setPlayOverlay(label, visible) { el['screen-play-label'].textContent = label; el['screen-play'].classList.toggle('hidden', !visible); }
+function setPlaybackStatus(state, message) { el['playback-status'].className = `playback-status ${state}`; el['playback-message'].textContent = message; el['playback-status'].classList.toggle('hidden', !message); el['retry-playback'].classList.toggle('hidden', state !== 'error'); }
+function renderDial() { el['channel-dial'].innerHTML = visibleChannels().map((channel, index) => `<button class="channel-dot ${index === channelIndex ? 'active' : ''}" data-index="${index}" aria-label="Channel ${channel.number}, ${channel.name}">${channel.number}</button>`).join(''); el['channel-dial'].querySelectorAll('button').forEach((button) => button.addEventListener('click', () => tune(Number(button.dataset.index)))); }
+function showMediaError(message) { clearTimeout(loadTimer); mediaReady = false; setPlaybackStatus('error', message); setPlayOverlay('Retry channel', true); }
+function loadSource() { const url = VIDEO_SOURCES[activeProgram.source][sourceIndex]; mediaReady = false; clearTimeout(loadTimer); setPlaybackStatus('loading', `Loading ${activeProgram.title}…`); setPlayOverlay('Loading channel…', true); el.player.pause(); el.player.removeAttribute('src'); el.player.src = url; el.player.load(); loadTimer = setTimeout(() => showMediaError('This channel took too long to load. Select Retry.'), 15000); }
+function tune(index) { channelIndex = index; const channel = currentChannel(); activeProgram = scheduleFor(channel); pendingOffset = activeProgram.offset; sourceIndex = 0; updateNow(); renderDial(); loadSource(); showToast(`${channel.number}. ${channel.name} — ${activeProgram.title}`); showHud(); }
+function retryPlayback() { const sources = VIDEO_SOURCES[activeProgram.source]; if (sourceIndex < sources.length - 1) sourceIndex += 1; loadSource(); }
+function applyScheduleOffset() { if (!Number.isFinite(el.player.duration) || el.player.duration <= 2) return; const offset = pendingOffset % Math.max(1, Math.floor(el.player.duration - 1)); try { el.player.currentTime = offset; } catch (_) {} }
+function playCurrent() { if (!activeProgram) return; if (!mediaReady) { retryPlayback(); return; } applyScheduleOffset(); setPlaybackStatus('loading', 'Starting video…'); el.player.play().then(() => { setPlayOverlay('Play channel', false); setPlaybackStatus('playing', ''); showHud(); }).catch(() => showMediaError('Playback was blocked. Select Play again with the remote or pointer.')); }
+function renderGuide() { const list = visibleChannels(); selectedGuide = Math.min(selectedGuide, list.length - 1); el['guide-list'].innerHTML = list.map((channel, index) => { const program = scheduleFor(channel); return `<button class="guide-row ${index === selectedGuide ? 'selected' : ''}" data-index="${index}"><span class="number">${String(channel.number).padStart(2, '0')}</span><span><strong>${channel.name}</strong><small>Now: ${program.title} · ${formatClock(program.offset)} in</small></span><time>${Math.max(1, Math.round((program.duration - program.offset) / 60))} min left</time></button>`; }).join(''); el['guide-list'].querySelectorAll('button').forEach((button) => button.addEventListener('click', () => { tune(Number(button.dataset.index)); closePanels(); })); }
+function renderModes() { const entries = Object.entries(modes); el['mode-list'].innerHTML = entries.map(([key, info], index) => `<button class="mode-row ${index === selectedMode ? 'selected' : ''}" data-mode="${key}"><span>${index + 1}</span><span><strong>${info.label}</strong><small>${info.description}</small></span></button>`).join(''); el['mode-list'].querySelectorAll('button').forEach((button) => button.addEventListener('click', () => setMode(button.dataset.mode))); }
 function setMode(next) { mode = next; localStorage.setItem('mytv-mode', mode); document.body.classList.toggle('simple', mode === 'simple'); el['mode-label'].textContent = mode.toUpperCase(); channelIndex = 0; selectedMode = Object.keys(modes).indexOf(mode); closePanels(); tune(0); showToast(`${modes[mode].label} mode enabled`); }
-function openPanel(name) { closePanels(); el[name].classList.remove('hidden'); if (name === 'guide') renderGuide(); else renderModes(); }
-function closePanels() { el.guide.classList.add('hidden'); el.settings.classList.add('hidden'); showHud(); }
-function panelOpen() { return !el.guide.classList.contains('hidden') ? 'guide' : !el.settings.classList.contains('hidden') ? 'settings' : null; }
-function handleKey(event) { const key = event.keyCode || event.which; const panel = panelOpen(); if ([37,38,39,40,13,461,27].includes(key)) event.preventDefault(); if (panel === 'guide') { if (key === 38) { selectedGuide = Math.max(0, selectedGuide-1); renderGuide(); } else if (key === 40) { selectedGuide = Math.min(visibleChannels().length-1, selectedGuide+1); renderGuide(); } else if (key === 13) { tune(selectedGuide); closePanels(); } else if (key === 461 || key === 27) closePanels(); return; } if (panel === 'settings') { if (key === 38) { selectedMode = Math.max(0, selectedMode-1); renderModes(); } else if (key === 40) { selectedMode = Math.min(Object.keys(modes).length-1, selectedMode+1); renderModes(); } else if (key === 13) setMode(Object.keys(modes)[selectedMode]); else if (key === 461 || key === 27) closePanels(); return; } if (key === 37) tune(channelIndex - 1); else if (key === 39) tune(channelIndex + 1); else if (key === 38) openPanel('guide'); else if (key === 40) openPanel('settings'); else if (key === 13 || key === 415) { if (el.player.paused) el.player.play().catch(() => el['screen-play'].classList.remove('hidden')); else el.player.pause(); showHud(); } else if (key === 461 || key === 27) showHud(); }
-el['screen-play'].addEventListener('click', () => el.player.play().then(() => el['screen-play'].classList.add('hidden')));
-el.player.addEventListener('ended', () => tune(channelIndex));
-document.addEventListener('keydown', handleKey);
-document.body.classList.toggle('simple', mode === 'simple'); el['mode-label'].textContent = mode.toUpperCase();
-// Remove the opening screen before requesting remote media. A slow/unavailable
-// video must never make the TV look as though MyTV itself is still loading.
-el.startup.classList.add('gone');
-tune(0); setInterval(updateNow, 1000);
+function panelOpen() { if (!el.guide.classList.contains('hidden')) return 'guide'; if (!el.settings.classList.contains('hidden')) return 'settings'; return null; }
+function openPanel(name) { closePanels(false); el[name].classList.remove('hidden'); if (name === 'guide') renderGuide(); else renderModes(); el[`${name}-close`].focus(); if (historyPanel !== name && window.history && window.history.pushState) { window.history.pushState({ mytvPanel: name }, ''); historyPanel = name; } }
+function closePanels(updateHistory = true) { const wasOpen = panelOpen(); el.guide.classList.add('hidden'); el.settings.classList.add('hidden'); if (updateHistory && wasOpen && historyPanel && window.history && window.history.back) { historyPanel = null; window.history.back(); } showHud(); }
+function handleKey(event) { const key = event.keyCode || event.which; const panel = panelOpen(); const isBack = key === 461 || key === 27 || event.key === 'BrowserBack' || event.key === 'Escape'; if ([37,38,39,40,13,415,461,27].includes(key) || isBack) event.preventDefault(); if (panel === 'guide') { if (key === 38) { selectedGuide = Math.max(0, selectedGuide - 1); renderGuide(); } else if (key === 40) { selectedGuide = Math.min(visibleChannels().length - 1, selectedGuide + 1); renderGuide(); } else if (key === 13) { tune(selectedGuide); closePanels(); } else if (isBack) closePanels(); return; } if (panel === 'settings') { if (key === 38) { selectedMode = Math.max(0, selectedMode - 1); renderModes(); } else if (key === 40) { selectedMode = Math.min(Object.keys(modes).length - 1, selectedMode + 1); renderModes(); } else if (key === 13) setMode(Object.keys(modes)[selectedMode]); else if (isBack) closePanels(); return; } if (key === 37) tune(channelIndex - 1); else if (key === 39) tune(channelIndex + 1); else if (key === 38) openPanel('guide'); else if (key === 40) openPanel('settings'); else if (key === 13 || key === 415) { if (el.player.paused) playCurrent(); else el.player.pause(); showHud(); } else if (isBack) showHud(); }
+el['screen-play'].addEventListener('click', playCurrent); el['retry-playback'].addEventListener('click', retryPlayback); el['guide-close'].addEventListener('click', closePanels); el['settings-close'].addEventListener('click', closePanels);
+el.player.addEventListener('loadedmetadata', applyScheduleOffset); el.player.addEventListener('canplay', () => { clearTimeout(loadTimer); mediaReady = true; setPlaybackStatus('ready', 'Ready to play. Select Play.'); setPlayOverlay('Play channel', true); }); el.player.addEventListener('playing', () => { setPlayOverlay('Play channel', false); setPlaybackStatus('playing', ''); }); el.player.addEventListener('ended', () => tune(channelIndex)); el.player.addEventListener('error', () => { const sources = activeProgram ? VIDEO_SOURCES[activeProgram.source] : []; if (sourceIndex < sources.length - 1) retryPlayback(); else showMediaError('This video could not play on this TV. Select Retry to try again.'); });
+window.addEventListener('popstate', () => { if (panelOpen()) closePanels(false); historyPanel = null; }); document.addEventListener('keydown', handleKey, true); document.body.classList.toggle('simple', mode === 'simple'); el['mode-label'].textContent = mode.toUpperCase(); el.startup.classList.add('gone'); tune(0); setInterval(updateNow, 1000);
