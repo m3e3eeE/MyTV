@@ -61,3 +61,20 @@ test('media error exposes retry rather than a silent black screen', async ({ bro
   await expect(page.locator('#retry-playback')).toBeVisible();
   await page.close();
 });
+
+test('manager creates a channel, saves a direct URL and keeps it after reload', async ({ page }) => {
+  await page.goto('/manage/');
+  await page.locator('#new-channel').click();
+  await page.locator('input[name="name"]').fill('My Clips');
+  await page.locator('input[name="simple"]').check();
+  await page.locator('#channel-form button[type="submit"]').click();
+  await page.locator('input[name="url"]').fill('https://media.w3.org/2010/05/video/movie_300.mp4');
+  await page.locator('input[name="title"]').fill('My legal clip');
+  await page.locator('input[name="duration"]').fill('120');
+  await page.locator('#video-form button[type="submit"]').click();
+  await expect(page.locator('#video-list')).toContainText('My legal clip');
+  await page.reload();
+  await expect(page.locator('#channel-list')).toContainText('My Clips');
+  await page.getByRole('button', { name: /My Clips/ }).click();
+  await expect(page.locator('#video-list')).toContainText('My legal clip');
+});
