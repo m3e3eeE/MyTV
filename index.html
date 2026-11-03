@@ -46,6 +46,16 @@
       <button id="screen-play" class="screen-play hidden" type="button">Press OK to start</button>
       <p class="remote-hint">Remote: ◀ ▶ change channel · ▲ guide · ▼ modes · OK play/pause · Back closes panels</p>
     </main>
+    <script>
+      // Last-resort TV-browser safety net: if an old browser cannot load or parse
+      // the application script, do not leave the user on an endless splash screen.
+      window.setTimeout(function () {
+        var startup = document.getElementById('startup');
+        if (startup && !startup.classList.contains('gone')) {
+          startup.classList.add('gone');
+        }
+      }, 1800);
+    </script>
     <script src="./app.js"></script>
   </body>
 </html>

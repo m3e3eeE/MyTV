@@ -22,7 +22,11 @@ const modes = {
   simple: { label: 'Simple', description: 'Large text and only selected channels.' },
 };
 
-const el = Object.fromEntries(['player','startup','hud','channel-number','channel-name','programme-title','programme-time','programme-progress','mode-label','channel-dial','guide','guide-list','settings','mode-list','toast','screen-play'].map(id => [id, document.getElementById(id)]));
+// Do not use Object.fromEntries here: some TV browser builds lag desktop browsers.
+const el = {};
+['player','startup','hud','channel-number','channel-name','programme-title','programme-time','programme-progress','mode-label','channel-dial','guide','guide-list','settings','mode-list','toast','screen-play'].forEach(id => {
+  el[id] = document.getElementById(id);
+});
 let mode = localStorage.getItem('mytv-mode') || 'normal';
 let channelIndex = 0;
 let selectedGuide = 0;
@@ -60,4 +64,7 @@ el['screen-play'].addEventListener('click', () => el.player.play().then(() => el
 el.player.addEventListener('ended', () => tune(channelIndex));
 document.addEventListener('keydown', handleKey);
 document.body.classList.toggle('simple', mode === 'simple'); el['mode-label'].textContent = mode.toUpperCase();
-tune(0); setTimeout(() => el.startup.classList.add('gone'), 650); setInterval(updateNow, 1000);
+// Remove the opening screen before requesting remote media. A slow/unavailable
+// video must never make the TV look as though MyTV itself is still loading.
+el.startup.classList.add('gone');
+tune(0); setInterval(updateNow, 1000);
